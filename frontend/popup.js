@@ -8,6 +8,53 @@ const sendBtn = document.getElementById("sendBtn");
 
 let cachedProductData = null;
 
+function getStorageByKey(key) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get([key], (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(result[key] || null);
+    });
+  });
+}
+
+function setStorageByKey(key, value) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [key]: value }, () => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function upsertProductHistory(productData, patch) {
+  if (!productData?.title) {
+    return;
+  }
+
+  const productName = String(productData.title).trim();
+  if (!productName) {
+    return;
+  }
+
+  const existing = (await getStorageByKey(productName)) || {};
+  const nextRecord = {
+    ...existing,
+    productName,
+    price: productData.price || existing.price || "",
+    reviews: Array.isArray(productData.reviewsList) ? productData.reviewsList : existing.reviews || [],
+    ...patch,
+    updatedAt: Date.now(),
+  };
+
+  await setStorageByKey(productName, nextRecord);
+}
+
 function setLoading(isLoading) {
   loadingSpinner.classList.toggle("hidden", !isLoading);
   loadingSpinner.classList.toggle("flex", isLoading);
@@ -268,10 +315,14 @@ async function summarizeCurrentProduct() {
     }
 
     const payload = await response.json();
+    const summaryText = payload.result || "No summary returned.";
+    await upsertProductHistory(productData, {
+      summary: summaryText,
+    });
     resultEl.innerHTML = `
       <div class="result-card success">
         <p class="result-label">AI Summary</p>
-        ${formatResult(payload.result)}
+        ${formatResult(summaryText)}
       </div>
     `;
   } catch (error) {
@@ -322,7 +373,16 @@ async function chatWithReviews() {
     }
 
     const payload = await response.json();
-    appendChatBubble("assistant", payload.answer || "No answer returned.");
+    const answerText = payload.answer || "No answer returned.";
+    appendChatBubble("assistant", answerText);
+
+    await upsertProductHistory(productData, {
+      chatHistory: [
+        ...((await getStorageByKey(productData.title))?.chatHistory || []),
+        { role: "user", text: question, timestamp: Date.now() },
+        { role: "assistant", text: answerText, timestamp: Date.now() },
+      ],
+    });
   } catch (error) {
     appendChatBubble("assistant", `Network error: ${error.message || "Unknown error"}`, true);
   } finally {

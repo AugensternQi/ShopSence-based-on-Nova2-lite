@@ -26,3 +26,19 @@ chrome.action.onClicked.addListener(async (tab) => {
     }
   }
 });
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type !== "OPEN_DASHBOARD_PAGE") {
+    return false;
+  }
+
+  chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }, () => {
+    if (chrome.runtime.lastError) {
+      sendResponse({ success: false, error: chrome.runtime.lastError.message });
+      return;
+    }
+    sendResponse({ success: true });
+  });
+
+  return true;
+});

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ShopSense AI Dashboard</title>
+    <link rel="stylesheet" href="dashboard.css" />
+  </head>
+  <body>
+    <div class="dashboard-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-glow"></div>
+          <h1>ShopSense AI</h1>
+          <p>History Console</p>
+        </div>
+
+        <div class="sidebar-toolbar">
+          <button id="refreshBtn" class="btn btn-ghost" type="button">Refresh</button>
+          <button id="clearAllBtn" class="btn btn-danger" type="button">Clear All History</button>
+        </div>
+
+        <div class="history-header">
+          <span>Products</span>
+          <span id="historyCountBadge" class="pill">0</span>
+        </div>
+
+        <div id="historyList" class="history-list" aria-live="polite"></div>
+
+        <div class="compare-dock">
+          <p id="compareHint" class="compare-hint">Select exactly 2 products to unlock PK.</p>
+          <button id="compareBtn" class="btn btn-primary" type="button" disabled>
+            Compare Selected
+          </button>
+        </div>
+      </aside>
+
+      <main id="mainContent" class="main-content" aria-live="polite"></main>
+    </div>
+
+    <template id="welcomeTemplate">
+      <section class="panel hero">
+        <h2>Welcome to the Product Intelligence Dashboard</h2>
+        <p>
+          Select a product from the left panel to inspect AI summary and conversation history, or pick
+          2 products for the ultimate AI Product PK.
+        </p>
+      </section>
+
+      <section class="stats-grid">
+        <article class="stat-card">
+          <p class="stat-label">Products Stored</p>
+          <p class="stat-value" data-stat="products">0</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">With AI Summary</p>
+          <p class="stat-value" data-stat="summaries">0</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">Total Dialog Messages</p>
+          <p class="stat-value" data-stat="messages">0</p>
+        </article>
+        <article class="stat-card">
+          <p class="stat-label">Products with Dialog</p>
+          <p class="stat-value" data-stat="withChat">0</p>
+        </article>
+      </section>
+    </template>
+
+    <script src="dashboard.js"></script>
+  </body>
+</html>

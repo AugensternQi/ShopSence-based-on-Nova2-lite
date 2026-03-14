@@ -6,6 +6,53 @@ let widgetRootEl = null;
 let cachedProductData = null;
 let dragState = null;
 
+function getStorageByKey(key) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get([key], (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(result[key] || null);
+    });
+  });
+}
+
+function setStorageByKey(key, value) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [key]: value }, () => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function upsertProductHistory(productData, patch) {
+  if (!productData?.title) {
+    return;
+  }
+
+  const productName = String(productData.title).trim();
+  if (!productName) {
+    return;
+  }
+
+  const existing = (await getStorageByKey(productName)) || {};
+  const nextRecord = {
+    ...existing,
+    productName,
+    price: productData.price || existing.price || "",
+    reviews: Array.isArray(productData.reviewsList) ? productData.reviewsList : existing.reviews || [],
+    ...patch,
+    updatedAt: Date.now(),
+  };
+
+  await setStorageByKey(productName, nextRecord);
+}
+
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) {
     return;
@@ -89,6 +136,11 @@ function ensureStyles() {
     }
     .ss-btn-primary {
       background: #4f46e5;
+      color: #fff;
+    }
+    .ss-btn-secondary {
+      margin-top: 8px;
+      background: #111827;
       color: #fff;
     }
     .ss-summary {
@@ -486,7 +538,11 @@ async function summarizeCurrentProduct() {
     }
 
     const payload = await response.json();
-    renderSummaryResultSuccess(payload.result || "No summary returned.");
+    const summaryText = payload.result || "No summary returned.";
+    await upsertProductHistory(cachedProductData, {
+      summary: summaryText,
+    });
+    renderSummaryResultSuccess(summaryText);
   } catch (error) {
     renderSummaryResultError(error.message || "Unknown error");
   } finally {
@@ -538,12 +594,30 @@ async function chatWithReviews() {
     }
 
     const payload = await response.json();
-    appendChatBubble("assistant", payload.answer || "No answer returned.");
+    const answerText = payload.answer || "No answer returned.";
+    appendChatBubble("assistant", answerText);
+
+    await upsertProductHistory(cachedProductData, {
+      chatHistory: [
+        ...((await getStorageByKey(cachedProductData.title))?.chatHistory || []),
+        { role: "user", text: question, timestamp: Date.now() },
+        { role: "assistant", text: answerText, timestamp: Date.now() },
+      ],
+    });
   } catch (error) {
     appendChatBubble("assistant", `Network error: ${error.message || "Unknown error"}`, true);
   } finally {
     setSendLoading(false);
   }
+}
+
+function openDashboardPage() {
+  chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD_PAGE" }, (response) => {
+    if (chrome.runtime.lastError || !response?.success) {
+      // Fallback in case the background worker is unavailable.
+      window.open(chrome.runtime.getURL("dashboard.html"), "_blank");
+    }
+  });
 }
 
 function onDragStart(event) {
@@ -591,6 +665,7 @@ function buildWidget() {
       <div class="ss-body">
         <p class="ss-subtitle">Drag this window and chat with product reviews.</p>
         <button class="ss-btn ss-btn-primary" data-ss="summarize-btn">Summarize Current Product</button>
+        <button class="ss-btn ss-btn-secondary" data-ss="dashboard-btn">Open Dashboard</button>
         <div class="ss-summary" data-ss="result">
           <p class="ss-status-text">Click summarize to analyze this product.</p>
         </div>
@@ -614,6 +689,7 @@ function buildWidget() {
   const headerEl = getWidgetRef("header");
   const closeBtnEl = getWidgetRef("close-btn");
   const summarizeBtnEl = getWidgetRef("summarize-btn");
+  const dashboardBtnEl = getWidgetRef("dashboard-btn");
   const sendBtnEl = getWidgetRef("send-btn");
   const chatInputEl = getWidgetRef("chat-input");
 
@@ -622,6 +698,7 @@ function buildWidget() {
     widgetRootEl.classList.add("ss-hidden");
   });
   summarizeBtnEl?.addEventListener("click", summarizeCurrentProduct);
+  dashboardBtnEl?.addEventListener("click", openDashboardPage);
   sendBtnEl?.addEventListener("click", chatWithReviews);
   chatInputEl?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
