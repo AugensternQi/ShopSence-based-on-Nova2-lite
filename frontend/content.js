@@ -1,19 +1,26 @@
 function extractAmazonProductData() {
   const titleEl = document.getElementById("productTitle");
-  const priceEl = document.querySelector(".a-price-whole");
+  const priceWholeEl = document.querySelector(
+    "#corePriceDisplay_desktop_feature_div .a-price .a-price-whole, .a-price .a-price-whole",
+  );
+  const priceFractionEl = document.querySelector(
+    "#corePriceDisplay_desktop_feature_div .a-price .a-price-fraction, .a-price .a-price-fraction",
+  );
   const reviewEls = document.querySelectorAll(".review-text-content");
 
   const productTitle = titleEl ? titleEl.textContent.trim() : "";
-  const price = priceEl ? priceEl.textContent.trim() : "";
+  const whole = priceWholeEl ? priceWholeEl.textContent.trim() : "";
+  const fraction = priceFractionEl ? priceFractionEl.textContent.trim() : "";
+  const price = whole ? `$${whole}${fraction ? `.${fraction}` : ""}` : "";
 
   const reviews = Array.from(reviewEls)
     .map((el) => el.textContent.trim())
     .filter(Boolean);
 
   return {
-    product_title: productTitle,
+    title: productTitle,
     price,
-    reviews_text: reviews.join(" "),
+    reviews: reviews.join(" "),
   };
 }
 

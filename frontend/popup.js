@@ -2,13 +2,6 @@ const summarizeBtn = document.getElementById("summarizeBtn");
 const loadingSpinner = document.getElementById("loadingSpinner");
 const resultEl = document.getElementById("result");
 
-const mockProductData = {
-  title: "Sony WH-1000XM5",
-  price: "$398",
-  reviews:
-    "Amazing noise cancellation, but the headband feels a bit fragile after 6 months.",
-};
-
 function setLoading(isLoading) {
   loadingSpinner.classList.toggle("hidden", !isLoading);
   loadingSpinner.classList.toggle("flex", isLoading);
@@ -28,51 +21,207 @@ function escapeHtml(text) {
   return String(text).replace(/[&<>"']/g, (char) => map[char]);
 }
 
-function formatResult(text) {
-  const safeText = escapeHtml(text || "No response returned.");
-  const paragraphs = safeText
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (paragraphs.length === 0) {
-    return "<p>No response returned.</p>";
-  }
-
-  return paragraphs.map((line) => `<p class="mb-2">${line}</p>`).join("");
+function formatInlineMarkdown(text) {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/`(.+?)`/g, "<code>$1</code>");
 }
 
-async function summarizeMockProduct() {
-  setLoading(true);
-  resultEl.innerHTML = '<p class="text-slate-500">Waiting for AI response...</p>';
+function closeList(htmlParts, state) {
+  if (state.inUl) {
+    htmlParts.push("</ul>");
+    state.inUl = false;
+  }
+  if (state.inOl) {
+    htmlParts.push("</ol>");
+    state.inOl = false;
+  }
+}
+
+function formatResult(text) {
+  const lines = String(text || "No response returned.").split(/\r?\n/);
+  const htmlParts = ['<div class="ai-markdown">'];
+  const state = { inUl: false, inOl: false };
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    const safe = formatInlineMarkdown(escapeHtml(trimmed));
+
+    if (!trimmed) {
+      closeList(htmlParts, state);
+      continue;
+    }
+
+    if (/^---+$/.test(trimmed)) {
+      closeList(htmlParts, state);
+      htmlParts.push("<hr />");
+      continue;
+    }
+
+    const h3Match = safe.match(/^###\s+(.+)$/);
+    if (h3Match) {
+      closeList(htmlParts, state);
+      htmlParts.push(`<h3>${h3Match[1]}</h3>`);
+      continue;
+    }
+
+    const h4Match = safe.match(/^####\s+(.+)$/);
+    if (h4Match) {
+      closeList(htmlParts, state);
+      htmlParts.push(`<h4>${h4Match[1]}</h4>`);
+      continue;
+    }
+
+    const olMatch = safe.match(/^\d+\.\s+(.+)$/);
+    if (olMatch) {
+      if (state.inUl) {
+        htmlParts.push("</ul>");
+        state.inUl = false;
+      }
+      if (!state.inOl) {
+        htmlParts.push("<ol>");
+        state.inOl = true;
+      }
+      htmlParts.push(`<li>${olMatch[1]}</li>`);
+      continue;
+    }
+
+    const ulMatch = safe.match(/^[-*]\s+(.+)$/);
+    if (ulMatch) {
+      if (state.inOl) {
+        htmlParts.push("</ol>");
+        state.inOl = false;
+      }
+      if (!state.inUl) {
+        htmlParts.push("<ul>");
+        state.inUl = true;
+      }
+      htmlParts.push(`<li>${ulMatch[1]}</li>`);
+      continue;
+    }
+
+    closeList(htmlParts, state);
+    htmlParts.push(`<p>${safe}</p>`);
+  }
+
+  closeList(htmlParts, state);
+  htmlParts.push("</div>");
+  return htmlParts.join("");
+}
+
+async function getActiveTab() {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!tabs || tabs.length === 0 || !tabs[0].id) {
+        reject(new Error("No active tab found."));
+        return;
+      }
+      resolve(tabs[0]);
+    });
+  });
+}
+
+function sendExtractMessage(tabId) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { type: "EXTRACT_PRODUCT_DATA" }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!response || !response.success) {
+        reject(new Error(response?.error || "Product data extraction failed."));
+        return;
+      }
+      resolve(response.data);
+    });
+  });
+}
+
+function injectContentScript(tabId) {
+  return new Promise((resolve, reject) => {
+    chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] }, () => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function isAmazonProductPage(url) {
+  return /^https:\/\/(www\.)?amazon\.(com|ca|co\.uk|de|fr|it|es|co\.jp|com\.au|in)\//.test(url);
+}
+
+async function extractProductDataFromTab(tab) {
+  if (!isAmazonProductPage(tab.url || "")) {
+    throw new Error("Please open a supported Amazon product page first.");
+  }
 
   try {
+    return await sendExtractMessage(tab.id);
+  } catch (_err) {
+    // The listener may be missing when extension was reloaded after the page loaded.
+    await injectContentScript(tab.id);
+    return sendExtractMessage(tab.id);
+  }
+}
+
+function validateProductData(payload) {
+  if (!payload || !payload.title) {
+    throw new Error("Could not find product title on this page.");
+  }
+  if (!payload.reviews) {
+    throw new Error("Could not find review text on this page.");
+  }
+}
+
+async function summarizeCurrentProduct() {
+  setLoading(true);
+  resultEl.innerHTML = '<p class="text-slate-500">Reading product data from the current tab...</p>';
+
+  try {
+    const activeTab = await getActiveTab();
+    const productData = await extractProductDataFromTab(activeTab);
+    validateProductData(productData);
+
+    resultEl.innerHTML = '<p class="text-slate-500">Waiting for AI response...</p>';
+
     const response = await fetch("http://localhost:8000/api/analyze", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(mockProductData),
+      body: JSON.stringify(productData),
     });
 
     if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
+      let detailText = "";
+      try {
+        const errorPayload = await response.json();
+        detailText = errorPayload?.detail ? `: ${errorPayload.detail}` : "";
+      } catch (_err) {
+        // Keep default detailText when response is not JSON.
+      }
+      throw new Error(`Request failed with status ${response.status}${detailText}`);
     }
 
     const payload = await response.json();
     resultEl.innerHTML = `
-      <div class="rounded-lg border border-indigo-100 bg-indigo-50 p-3">
-        <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-indigo-700">
-          AI Summary
-        </p>
+      <div class="result-card success">
+        <p class="result-label">AI Summary</p>
         ${formatResult(payload.result)}
       </div>
     `;
   } catch (error) {
     resultEl.innerHTML = `
-      <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">
-        <p class="font-semibold">Could not fetch summary</p>
-        <p class="mt-1 text-sm">${escapeHtml(error.message || "Unknown error")}</p>
+      <div class="result-card error">
+        <p><strong>Could not fetch summary</strong></p>
+        <p>${escapeHtml(error.message || "Unknown error")}</p>
       </div>
     `;
   } finally {
@@ -80,4 +229,4 @@ async function summarizeMockProduct() {
   }
 }
 
-summarizeBtn.addEventListener("click", summarizeMockProduct);
+summarizeBtn.addEventListener("click", summarizeCurrentProduct);
