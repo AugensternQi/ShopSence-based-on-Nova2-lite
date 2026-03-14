@@ -48,7 +48,7 @@ def analyze_product(payload: ProductRequest) -> dict[str, str]:
 
     try:
         response = client.converse(
-            modelId="amazon.nova-2-lite-v1:0",
+            modelId="global.amazon.nova-2-lite-v1:0",
             messages=[
                 {
                     "role": "user",
