@@ -328,26 +328,221 @@ function renderCompareLoading() {
 function buildComparePrompt(productA, productB) {
   const chatA = productA.chatHistory.map((m, idx) => `${idx + 1}. [${m.role}] ${m.text}`).join("\n");
   const chatB = productB.chatHistory.map((m, idx) => `${idx + 1}. [${m.role}] ${m.text}`).join("\n");
+  const productAData = [
+    `Summary: ${productA.summary || "No summary stored."}`,
+    "Conversation:",
+    chatA || "- No chat history.",
+  ].join("\n");
+  const productBData = [
+    `Summary: ${productB.summary || "No summary stored."}`,
+    "Conversation:",
+    chatB || "- No chat history.",
+  ].join("\n");
 
   return [
-    "Please compare these two products based on the provided summary and conversation context.",
+    "System: You are a senior shopping comparison expert.",
+    "Be direct. Minimal words. No long explanations.",
     "",
+    "Generate the result in a product comparison card format suitable for a dashboard.",
+    "",
+    "Rules:",
+    "- Keep text minimal.",
+    "- Use short phrases instead of sentences.",
+    "- Avoid long explanations.",
+    "- Make the structure easy to render as cards.",
+    "- Focus on visual comparison.",
+    "",
+    "Input products:",
     `Product A: ${productA.productName}`,
-    `A Summary: ${productA.summary || "No summary stored."}`,
-    `A Conversation:`,
-    chatA || "- No chat history.",
-    "",
+    `A Data: ${productAData}`,
     `Product B: ${productB.productName}`,
-    `B Summary: ${productB.summary || "No summary stored."}`,
-    `B Conversation:`,
-    chatB || "- No chat history.",
+    `B Data: ${productBData}`,
     "",
-    "Output requirement:",
-    "1) Product A - strengths and weaknesses",
-    "2) Product B - strengths and weaknesses",
-    "3) Side-by-side recommendation by user type",
-    "4) Final winner and why",
+    "Use exactly this structure and headings:",
+    "",
+    "🏆 AI Verdict",
+    "(one short line only)",
+    "",
+    "⚖️ Key Differences",
+    "",
+    "Price",
+    "A: ...",
+    "B: ...",
+    "",
+    "Flavor",
+    "A: ...",
+    "B: ...",
+    "",
+    "Energy",
+    "A: ...",
+    "B: ...",
+    "",
+    "Ingredients",
+    "A: ...",
+    "B: ...",
+    "",
+    "Value",
+    "A: ...",
+    "B: ...",
+    "",
+    "⚠️ Drawbacks",
+    "",
+    "A: ...",
+    "B: ...",
+    "",
+    "👤 Best For",
+    "",
+    "A: ...",
+    "B: ...",
+    "",
+    "Do not add any extra sections.",
   ].join("\n");
+}
+
+function parseABLine(line) {
+  const normalized = String(line || "").trim();
+
+  // Support markdown table rows like: | A | text |
+  if (normalized.includes("|")) {
+    const cells = normalized
+      .split("|")
+      .map((cell) => cell.trim())
+      .filter(Boolean);
+    if (cells.length >= 2) {
+      const sideCell = cells[0].toUpperCase().replace(/\s+/g, "");
+      if (sideCell === "A" || sideCell === "B") {
+        return {
+          side: sideCell,
+          text: cells.slice(1).join(" | ").trim(),
+        };
+      }
+    }
+  }
+
+  // Support "A: ...", "A - ...", "Product A: ...", "产品A：..."
+  const match = normalized.match(/^(?:product\s*|产品\s*)?(A|B)\s*[:：\-—]\s*(.+)$/i);
+  if (match) {
+    return {
+      side: match[1].toUpperCase(),
+      text: match[2].trim(),
+    };
+  }
+  return null;
+}
+
+function normalizeComparisonLine(line) {
+  let output = String(line || "").trim();
+  output = output.replace(/^#{1,6}\s*/, "");
+  output = output.replace(/^[-*]\s+/, "");
+  output = output.replace(/^\*\*(.+)\*\*$/, "$1");
+  return output.trim();
+}
+
+function parseComparisonAnswer(answerText) {
+  const rawLines = String(answerText || "")
+    .split(/\r?\n/)
+    .map(normalizeComparisonLine)
+    .filter(Boolean);
+
+  const parsed = {
+    verdict: "",
+    differences: [],
+    drawbacks: { A: "", B: "" },
+    bestFor: { A: "", B: "" },
+  };
+
+  let mode = "";
+  let currentDimension = null;
+
+  for (const line of rawLines) {
+    const lower = line.toLowerCase();
+
+    if (line.startsWith("🏆") || lower.includes("ai verdict")) {
+      mode = "verdict";
+      currentDimension = null;
+      continue;
+    }
+    if (line.startsWith("⚖️") || lower.includes("key differences")) {
+      mode = "diff";
+      currentDimension = null;
+      continue;
+    }
+    if (line.startsWith("⚠️") || line.startsWith("⚠") || lower.includes("drawbacks") || line.includes("缺点")) {
+      mode = "drawbacks";
+      currentDimension = null;
+      continue;
+    }
+    if (line.startsWith("👤") || lower.includes("best for") || line.includes("适合")) {
+      mode = "bestfor";
+      currentDimension = null;
+      continue;
+    }
+
+    const ab = parseABLine(line);
+
+    if (mode === "verdict") {
+      if (!parsed.verdict && !line.includes("one short line only")) {
+        parsed.verdict = line;
+      }
+      continue;
+    }
+
+    if (mode === "diff") {
+      if (!ab) {
+        currentDimension = {
+          name: line,
+          A: "",
+          B: "",
+        };
+        parsed.differences.push(currentDimension);
+        continue;
+      }
+      if (currentDimension) {
+        currentDimension[ab.side] = ab.text;
+      }
+      continue;
+    }
+
+    if (mode === "drawbacks" && ab) {
+      parsed.drawbacks[ab.side] = ab.text;
+      continue;
+    }
+
+    if (mode === "bestfor" && ab) {
+      parsed.bestFor[ab.side] = ab.text;
+    }
+  }
+
+  if (!parsed.verdict) {
+    parsed.verdict = "Close match";
+  }
+
+  // Fallback: some models put Drawbacks / Best For inside the differences block.
+  const normalizeName = (value) => String(value || "").toLowerCase().replace(/\s+/g, "");
+  const drawbackIdx = parsed.differences.findIndex((item) => {
+    const n = normalizeName(item.name);
+    return n.includes("drawback") || n.includes("weakness") || n.includes("con");
+  });
+  if (drawbackIdx >= 0) {
+    parsed.drawbacks.A = parsed.drawbacks.A || parsed.differences[drawbackIdx].A || "";
+    parsed.drawbacks.B = parsed.drawbacks.B || parsed.differences[drawbackIdx].B || "";
+    parsed.differences.splice(drawbackIdx, 1);
+  }
+
+  const bestForIdx = parsed.differences.findIndex((item) => {
+    const n = normalizeName(item.name);
+    return n.includes("bestfor") || n.includes("targetuser") || n.includes("who");
+  });
+  if (bestForIdx >= 0) {
+    parsed.bestFor.A = parsed.bestFor.A || parsed.differences[bestForIdx].A || "";
+    parsed.bestFor.B = parsed.bestFor.B || parsed.differences[bestForIdx].B || "";
+    parsed.differences.splice(bestForIdx, 1);
+  }
+
+  if (!parsed.differences.length) {
+    return null;
+  }
+  return parsed;
 }
 
 async function requestComparison(productA, productB) {
@@ -384,33 +579,128 @@ async function requestComparison(productA, productB) {
 }
 
 function renderCompareResult(productA, productB, answerText) {
+  const parsed = parseComparisonAnswer(answerText);
+  if (!parsed) {
+    mainContentEl.innerHTML = `
+      <div class="pk-shell">
+        <section class="panel pk-header">
+          <h2>AI Product PK</h2>
+          <p class="muted">${escapeHtml(productA.productName)} vs ${escapeHtml(productB.productName)}</p>
+        </section>
+        <section class="panel pk-foot">
+          <h3>AI Verdict</h3>
+          <div class="markdown">
+            <p>${formatMarkdown(answerText)}</p>
+          </div>
+        </section>
+      </div>
+    `;
+    return;
+  }
+
+  const differenceCards = parsed.differences
+    .map(
+      (item) => `
+        <article class="diff-card">
+          <h4>${escapeHtml(item.name)}</h4>
+          <div class="diff-row">
+            <span class="side side-a">A</span>
+            <p>${escapeHtml(item.A || "-")}</p>
+          </div>
+          <div class="diff-row">
+            <span class="side side-b">B</span>
+            <p>${escapeHtml(item.B || "-")}</p>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
+
+  const tableRows = [
+    ...parsed.differences.map((item) => ({
+      dim: item.name,
+      A: item.A || "-",
+      B: item.B || "-",
+    })),
+    { dim: "Drawbacks", A: parsed.drawbacks.A || "-", B: parsed.drawbacks.B || "-" },
+    { dim: "Best For", A: parsed.bestFor.A || "-", B: parsed.bestFor.B || "-" },
+  ]
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.dim)}</td>
+          <td>${escapeHtml(row.A)}</td>
+          <td>${escapeHtml(row.B)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+
   mainContentEl.innerHTML = `
-    <div class="pk-shell">
+    <div class="pk-shell pk-shell-v2">
       <section class="panel pk-header">
         <h2>AI Product PK</h2>
         <p class="muted">${escapeHtml(productA.productName)} vs ${escapeHtml(productB.productName)}</p>
       </section>
 
-      <section class="pk-grid">
-        <article class="panel pk-col">
-          <h3>${escapeHtml(productA.productName)}</h3>
-          <div class="markdown">
-            <p>${formatMarkdown(productA.summary || "No summary available for this product.")}</p>
-          </div>
-        </article>
-        <article class="panel pk-col">
-          <h3>${escapeHtml(productB.productName)}</h3>
-          <div class="markdown">
-            <p>${formatMarkdown(productB.summary || "No summary available for this product.")}</p>
-          </div>
-        </article>
+      <section class="pk-product-tags">
+        <div class="pk-tag a">🔴 ${escapeHtml(productA.productName)}</div>
+        <div class="pk-tag b">🔵 ${escapeHtml(productB.productName)}</div>
       </section>
 
-      <section class="panel pk-foot">
-        <h3>AI Verdict</h3>
-        <div class="markdown">
-          <p>${formatMarkdown(answerText)}</p>
+      <section class="panel verdict-card">
+        <h3>🏆 AI Verdict</h3>
+        <p>${escapeHtml(parsed.verdict)}</p>
+      </section>
+
+      <section class="panel pk-diff-wrap">
+        <h3>⚖️ Key Differences</h3>
+        <div class="pk-diff-grid">
+          ${differenceCards}
         </div>
+      </section>
+
+      <section class="panel pk-table-wrap">
+        <h3>📊 Comparison Table</h3>
+        <div class="pk-table-scroll">
+          <table class="pk-table">
+            <thead>
+              <tr>
+                <th>Dimension</th>
+                <th>🔴 ${escapeHtml(productA.productName)}</th>
+                <th>🔵 ${escapeHtml(productB.productName)}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tableRows}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="pk-bottom-grid">
+        <article class="panel mini-card">
+          <h3>⚠️ Drawbacks</h3>
+          <div class="diff-row">
+            <span class="side side-a">A</span>
+            <p>${escapeHtml(parsed.drawbacks.A || "-")}</p>
+          </div>
+          <div class="diff-row">
+            <span class="side side-b">B</span>
+            <p>${escapeHtml(parsed.drawbacks.B || "-")}</p>
+          </div>
+        </article>
+        <article class="panel mini-card">
+          <h3>👤 Best For</h3>
+          <div class="diff-row">
+            <span class="side side-a">A</span>
+            <p>${escapeHtml(parsed.bestFor.A || "-")}</p>
+          </div>
+          <div class="diff-row">
+            <span class="side side-b">B</span>
+            <p>${escapeHtml(parsed.bestFor.B || "-")}</p>
+          </div>
+        </article>
       </section>
     </div>
   `;
