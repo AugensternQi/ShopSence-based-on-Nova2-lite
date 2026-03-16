@@ -182,6 +182,16 @@ function formatMarkdown(text) {
     .replace(/\n/g, "<br/>");
 }
 
+function formatChatMarkdown(text) {
+  const safe = escapeHtml(text || "");
+  return safe
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/^\s*[-*]\s+/gm, "• ")
+    .replace(/\n{2,}/g, "</p><p>")
+    .replace(/\n/g, "<br/>");
+}
+
 function setCompareButtonState() {
   const count = selectedProducts.size;
   compareBtn.disabled = count !== 2;
@@ -307,9 +317,13 @@ function renderProductDetail(productName) {
         ${record.chatHistory
           .map(
             (msg) => `
-              <div class="chat-message">
+              <div class="chat-message ${msg.role === "user" ? "user" : "assistant"}">
                 <div class="chat-role">${escapeHtml(msg.role)}</div>
-                <div class="chat-text">${escapeHtml(msg.text)}</div>
+                <div class="chat-text">${
+                  msg.role === "assistant"
+                    ? formatChatMarkdown(msg.text)
+                    : escapeHtml(msg.text)
+                }</div>
               </div>
             `,
           )

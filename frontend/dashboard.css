@@ -353,6 +353,11 @@ body {
   padding: 10px 12px;
 }
 
+.chat-message.assistant {
+  background: #ffffff;
+  border-color: #e6dcc9;
+}
+
 .chat-message + .chat-message {
   margin-top: 8px;
 }
@@ -365,9 +370,17 @@ body {
   text-transform: uppercase;
 }
 
+.chat-message.assistant .chat-role {
+  color: #6b7280;
+}
+
 .chat-text {
   margin-top: 6px;
   white-space: pre-wrap;
+}
+
+.chat-message.assistant .chat-text {
+  color: #1f2937;
 }
 
 .loading {
